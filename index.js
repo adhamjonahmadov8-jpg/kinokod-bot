@@ -108,3 +108,6 @@ bot.callbackQuery(/check_(.+)/, async (ctx) => {
 
 bot.start();
 console.log('🤖 Bot obuna tekshiruvi bilan ishga tushdi!');
+bot.catch((err) => {
+  console.error("Botda xatolik yuz berdi:", err.error);
+});
