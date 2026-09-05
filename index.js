@@ -10,21 +10,36 @@ const ADMIN_USERNAME = "@ADHAMAJON_AHMADOV";
 
 const bot = new Bot(BOT_TOKEN);
 
-// Xotira bazasi
-const moviesDatabase = new Map(); // Kino kodi -> Video Message/File ID
+// Xotira bazasi: KOD -> { fileId: "...", caption: "..." }
+const moviesDatabase = new Map();
 const requiredChannels = new Set();
 const usersList = new Set();
 let totalSearches = 0;
 
 // ==========================================
-// 2. SERVER (RENDER 24/7 ONLINE)
+// 2. SERVER VA AVTO-UYG'OTISH (SELF-PING 24/7)
 // ==========================================
 const PORT = process.env.PORT || 10000;
-http.createServer((req, res) => {
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL; // Render avtomatik beradigan URL
+
+const server = http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("Universal KinoBot Active 24/7");
-}).listen(PORT, () => {
+  res.end("KinoBot Engine Active 24/7");
+});
+
+server.listen(PORT, () => {
   console.log(`[SYSTEM] Server ${PORT}-portda ishlamoqda.`);
+  
+  // Render uxlab qolmasligi uchun har 5 minutda o'ziga ping yuborish
+  if (RENDER_URL) {
+    setInterval(() => {
+      http.get(RENDER_URL, (res) => {
+        console.log("[SELF-PING] Bot uyg'oq holatda saqlandi.");
+      }).on("error", (err) => {
+        console.error("[PING ERROR]:", err.message);
+      });
+    }, 5 * 60 * 1000); // 5 daqiqa
+  }
 });
 
 // ==========================================
@@ -77,13 +92,16 @@ bot.use(async (ctx, next) => {
 bot.on("channel_post", async (ctx) => {
   const post = ctx.channelPost;
   
-  // Agar postda video va izoh (caption) bo'lsa
   if (post.video && post.caption) {
-    // Izohdan raqamni topish (Masalan: "Kod: 257" -> 257)
+    // Post izohidagi eng birinchi raqamni KOD deb oladi
     const match = post.caption.match(/\d+/);
     if (match) {
       const code = match[0];
-      moviesDatabase.set(code, post.video.file_id);
+      // Videoning file_id va to'liq izohini saqlab qoladi
+      moviesDatabase.set(code, {
+        fileId: post.video.file_id,
+        caption: post.caption
+      });
       console.log(`[AUTO-SAVE] Kanal postidan kino saqlandi! KOD: ${code}`);
     }
   }
@@ -113,7 +131,7 @@ bot.command("start", async (ctx) => {
 
   await ctx.reply(
     `🎬 **Xush kelibsiz, ${ctx.from.first_name}!**\n\n` +
-    `Kino yuklab olish uchun shunchaki kino kodini yuboring (Masalan: \`200\` yoki \`257\`).`,
+    `Kino yuklab olish uchun shunchaki kino kodini yuboring (Masalan: \`21\` yoki \`200\`).`,
     { parse_mode: "Markdown", reply_markup: userKb }
   );
 });
@@ -121,9 +139,9 @@ bot.command("start", async (ctx) => {
 bot.hears("🔍 Qanday foydalaniladi?", async (ctx) => {
   await ctx.reply(
     "📌 **Yo'riqnoma:**\n\n" +
-    "1. Kanalimizdan kino kodini ko'ring (Masalan: `Kod: 257`).\n" +
-    "2. Botga faqat raqamni yuboring (Masalan: `257`).\n" +
-    "3. Bot kinoni sizga yetkazib beradi!",
+    "1. Kanalimizdan kino kodini toping.\n" +
+    "2. Botga faqat raqamni yuboring (Masalan: `21`).\n" +
+    "3. Bot kinoni barcha ma'lumotlari bilan sizga yetkazib beradi!",
     { parse_mode: "Markdown" }
   );
 });
@@ -134,7 +152,7 @@ bot.hears("📊 Statistika", async (ctx) => {
     `👥 Foydalanuvchilar: **${usersList.size}** ta\n` +
     `🎬 Baza ichidagi kinolar: **${moviesDatabase.size}** ta\n` +
     `🔎 Jami qidiruvlar: **${totalSearches}** marta\n` +
-    `⚡️ Server holati: **Online (24/7)**`,
+    `⚡️ Server holati: **Online 24/7 (Anti-Sleep Active)**`,
     { parse_mode: "Markdown" }
   );
 });
@@ -178,10 +196,10 @@ bot.command("send", async (ctx) => {
 });
 
 // ==========================================
-// 7. KINO YUKLASH VA QIDIRISH MANTIQLARI
+// 7. KINO YUKLASH VA QIDIRISH (TO'LIQ MA'LUMOT BILERAN)
 // ==========================================
 
-// Botingiz shaxsiyiga admin video yuborib izohiga "257" yoki "kino:257" deb yozganda saqlash
+// Bot shaxsiyiga admin video va to'liq izoh yuborganda saqlash
 bot.on("message:video", async (ctx) => {
   if (ctx.from.id !== MY_ADMIN_ID) return;
 
@@ -190,25 +208,26 @@ bot.on("message:video", async (ctx) => {
 
   if (match) {
     const code = match[0];
-    const fileId = ctx.message.video.file_id;
-    moviesDatabase.set(code, fileId);
-    await ctx.reply(`✅ **Kino saqlandi!**\n🔑 KODI: \`${code}\``, { parse_mode: "Markdown" });
+    moviesDatabase.set(code, {
+      fileId: ctx.message.video.file_id,
+      caption: caption
+    });
+    await ctx.reply(`✅ **Kino to'liq ma'lumotlari bilan saqlandi!**\n🔑 KODI: \`${code}\``, { parse_mode: "Markdown" });
   } else {
     await ctx.reply("⚠️ Izohda raqamli kod topilmadi!", { parse_mode: "Markdown" });
   }
 });
 
-// Foydalanuvchi kod yuborganda kinoni uzatish
+// Foydalanuvchi kod yuborganda kinoni va uning barcha izohini yuborish
 bot.on("message:text", async (ctx) => {
   const text = ctx.message.text.trim();
 
   if (["🔍 Qanday foydalaniladi?", "📊 Statistika", "👨‍💻 Admin bilan aloqa"].includes(text)) return;
 
-  // Izohdan faqat raqamni ajratib olish (Masalan: "kod: 257" kelsa ham 257 deb oladi)
   const match = text.match(/\d+/);
 
   if (!match) {
-    return ctx.reply("❌ **Noto'g'ri kod!** Iltimos, faqat kino kodini yuboring (Masalan: `257`).", { parse_mode: "Markdown" });
+    return ctx.reply("❌ **Noto'g'ri kod!** Iltimos, faqat kino kodini yuboring (Masalan: `21`).", { parse_mode: "Markdown" });
   }
 
   const code = match[0];
@@ -216,10 +235,9 @@ bot.on("message:text", async (ctx) => {
   await ctx.replyWithChatAction("upload_video");
 
   if (moviesDatabase.has(code)) {
-    const videoFileId = moviesDatabase.get(code);
-    await ctx.replyWithVideo(videoFileId, {
-      caption: `🎬 **Kino kodi: ${code}**\n\n🍿 Maroqli tomosha tilaymiz!`,
-      parse_mode: "Markdown",
+    const movieData = moviesDatabase.get(code);
+    await ctx.replyWithVideo(movieData.fileId, {
+      caption: movieData.caption, // Siz kanalda yozgan BARCHA ma'lumot (Nomi, janri, tili) chiqadi
     });
     totalSearches++;
   } else {
