@@ -1,123 +1,139 @@
-const http = require('http');
+const { Bot, InlineKeyboard, Keyboard } = require("grammy");
+const http = require("http");
 
-// Render port talab qilgani uchun kichik server
-const PORT = process.env.PORT || 3000;
+// ------------------------------------------------------------------
+// 1. SOZLAMALAR (TOKEN VA MA'LUMOTLAR)
+// ------------------------------------------------------------------
+// Token va Kanal ID'sini Render Environment'dan oladi, bo'lmasa pastdagini ishlatadi
+const BOT_TOKEN = process.env.BOT_TOKEN || "8937720285:AAG-qKGEE8dCMsH2CNQwRlSrAtRCPwsN7DQ";
+const CHANNEL_ID = process.env.CHANNEL_ID || "-100XXXXXXXXXX"; // Bu yerga kanal ID'ingizni yozing (-100 bilan)
+const ADMIN_USERNAME = "@adhamjon"; // Sizning Telegram user name'ingiz
+
+const bot = new Bot(BOT_TOKEN);
+
+// Ma'lumotlarni vaqtinchalik saqlash
+const users = new Set();
+const movieStats = { totalSearches: 0 };
+
+// ------------------------------------------------------------------
+// 2. SERVER (RENDER UXLAP QOLMASLIGI UCHUN PORT BINDING)
+// ------------------------------------------------------------------
+const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot is running!');
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("Kinokod Bot Active!");
 }).listen(PORT, () => {
-  console.log(`Server is listening on port ${PORT}`);
+  console.log(`Server ${PORT}-portda ishlamoqda.`);
 });
-require('dotenv').config();
-const { Bot, InlineKeyboard } = require('grammy');
-const config = require('./config');
 
-const bot = new Bot(process.env.BOT_TOKEN);
-const moviesDatabase = {};
-
-// Obunani tekshirish funksiyasi
-async function checkSubscription(ctx) {
-  const userId = ctx.from.id;
-  const notSubscribedChannels = [];
-
-  for (const channel of config.REQUIRED_CHANNELS) {
-    try {
-      const member = await ctx.api.getChatMember(channel, userId);
-      // Agar foydalanuvchi kanalda bo'lmasa yoki chiqib ketgan bo'lsa
-      if (['left', 'kicked'].includes(member.status)) {
-        notSubscribedChannels.push(channel);
-      }
-    } catch (error) {
-      console.error(`Kanalni tekshirishda xatolik (${channel}):`, error.message);
-    }
+// ------------------------------------------------------------------
+// 3. MIDDLEWARE (FOYDALANUVCHILARNI RO'YXATGA OLISH)
+// ------------------------------------------------------------------
+bot.use(async (ctx, next) => {
+  if (ctx.from && !ctx.from.is_bot) {
+    users.add(ctx.from.id);
   }
+  await next();
+});
 
-  return notSubscribedChannels;
-}
+// ------------------------------------------------------------------
+// 4. BUYRUQLAR VA MENYU
+// ------------------------------------------------------------------
 
-bot.command('start', (ctx) => {
-  ctx.reply(
-    "🎬 **KinoKod botiga xush kelibsiz!**\n\nKino ko'rish uchun kino kodini yuboring (masalan: 101):",
-    { parse_mode: 'Markdown' }
+// /start buyrug'i
+bot.command("start", async (ctx) => {
+  const welcomeText = 
+    `🎬 **Universal Kino Botiga xush kelibsiz!**\n\n` +
+    `Siz bu bot orqali istalgan kinoni yuqori sifatda va tezkorlik bilan yuklab olishingiz mumkin.\n\n` +
+    `🔍 **Kino olish uchun:**\n` +
+    `Kino kodini yuboring (Masalan: \`15\`)`;
+
+  const mainKeyboard = new Keyboard()
+    .text("🔍 Qanday foydalaniladi?").text("📊 Statistika").row()
+    .text("👨‍💻 Admin bilan aloqa").resized();
+
+  await ctx.reply(welcomeText, {
+    parse_mode: "Markdown",
+    reply_markup: mainKeyboard,
+  });
+});
+
+// Qanday foydalaniladi
+bot.hears("🔍 Qanday foydalaniladi?", async (ctx) => {
+  await ctx.reply(
+    "📌 **Yo'riqnoma:**\n\n" +
+    "1. Kanalimizdan o'zingizga yoqqan kinoning kodini toping.\n" +
+    "2. Ushbu kodni botga yuboring.\n" +
+    "3. Bot sizga kinoni lahzalarda uzatib beradi!",
+    { parse_mode: "Markdown" }
   );
 });
 
-// Kanaldan kelgan postlarni ushlash
-bot.on('channel_post:video', async (ctx) => {
-  const video = ctx.channelPost.video;
-  const caption = ctx.channelPost.caption || '';
-  const match = caption.match(/[\(\[]?(\d+)[\)\]]?/);
+// Statistika
+bot.hears("📊 Statistika", async (ctx) => {
+  const statMessage = 
+    `📊 **Bot Statistikasi:**\n\n` +
+    `👥 Jami foydalanuvchilar: **${users.size}** ta\n` +
+    `🎬 Qidirilgan kinolar: **${movieStats.totalSearches}** marta\n` +
+    `⚡️ Server holati: **A'lo (24/7 online)**`;
 
-  if (match) {
-    const movieCode = match[1];
-    moviesDatabase[movieCode] = {
-      fileId: video.file_id,
-      caption: caption
-    };
-    console.log(`✅ YANGI KINO SAQLANDI: Kod [${movieCode}]`);
-  }
+  await ctx.reply(statMessage, { parse_mode: "Markdown" });
 });
 
-// Foydalanuvchi kod yuborganda
-bot.on('message:text', async (ctx) => {
-  const userCode = ctx.message.text.trim();
+// Admin bilan aloqa
+bot.hears("👨‍💻 Admin bilan aloqa", async (ctx) => {
+  await ctx.reply(`💬 Savol va murojaatlar uchun admin: ${ADMIN_USERNAME}`);
+});
 
-  // 1. Obunani tekshiramiz
-  const missingChannels = await checkSubscription(ctx);
+// ------------------------------------------------------------------
+// 5. ASOSIY KINO QIDIRISH VA TEZKOR UZATISH (FORWARD)
+// ------------------------------------------------------------------
+bot.on("message:text", async (ctx) => {
+  const text = ctx.message.text.trim();
 
-  if (missingChannels.length > 0) {
-    const keyboard = new InlineKeyboard();
+  // Tugma xabarlarini o'tkazib yuboramiz
+  if (["🔍 Qanday foydalaniladi?", "📊 Statistika", "👨‍💻 Admin bilan aloqa"].includes(text)) {
+    return;
+  }
 
-    // Obuna bo'lmagan kanallarini tugma qilib chiqarish
-    missingChannels.forEach((channel, index) => {
-      const channelLink = channel.startsWith('@') 
-        ? `https://t.me/${channel.replace('@', '')}` 
-        : channel;
-      keyboard.url(`📢 ${index + 1}-Kanalga obuna bo'lish`, channelLink).row();
-    });
+  // Kod faqat raqam ekanligini tekshiramiz
+  const msgId = parseInt(text);
 
-    keyboard.text("✅ Obunani tekshirish", `check_${userCode}`);
-
+  if (isNaN(msgId)) {
     return ctx.reply(
-      "⚠️ **Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:**", 
-      { reply_markup: keyboard, parse_mode: 'Markdown' }
+      "❌ **Noto'g'ri format!**\nIltimos, faqat kino kodini (raqam) yuboring.",
+      { parse_mode: "Markdown" }
     );
   }
 
-  // 2. Kinoni topib beramiz
-  if (moviesDatabase[userCode]) {
-    const movie = moviesDatabase[userCode];
-    await ctx.replyWithVideo(movie.fileId, { caption: movie.caption });
-  } else {
-    await ctx.reply("❌ Afsuski, bu kod bo'yicha kino topilmadi.");
+  try {
+    // Yuklanmoqda statusini ko'rsatish
+    await ctx.replyWithChatAction("upload_video");
+
+    // Katta hajmdagi kinolarni ham bir soniyada uzatish
+    await ctx.api.forwardMessage(ctx.chat.id, CHANNEL_ID, msgId);
+
+    // Statistikaga qo'shish
+    movieStats.totalSearches++;
+
+  } catch (error) {
+    console.error(`Kino uzatishda xatolik (ID: ${msgId}):`, error.message);
+
+    await ctx.reply(
+      "❌ **Afsuski, bu kod bo'yicha kino topilmadi.**\n\n" +
+      "Kodni to'g'ri kiritganingizni yoki kanalimizda ushbu kino mavjudligini tekshirib ko'ring.",
+      { parse_mode: "Markdown" }
+    );
   }
 });
 
-// "Obunani tekshirish" tugmasi bosilganda
-bot.callbackQuery(/check_(.+)/, async (ctx) => {
-  const userCode = ctx.match[1];
-  const missingChannels = await checkSubscription(ctx);
-
-  if (missingChannels.length === 0) {
-    await ctx.answerCallbackQuery({ text: "✅ Rahmat! Obuna tasdiqlandi." });
-    await ctx.deleteMessage();
-
-    if (moviesDatabase[userCode]) {
-      const movie = moviesDatabase[userCode];
-      await ctx.replyWithVideo(movie.fileId, { caption: movie.caption });
-    } else {
-      await ctx.reply("❌ Afsuski, bu kod bo'yicha kino topilmadi.");
-    }
-  } else {
-    await ctx.answerCallbackQuery({ 
-      text: "❌ Hali hamma kanallarga obuna bo'lmadingiz!", 
-      show_alert: true 
-    });
-  }
-});
-
-bot.start();
-console.log('🤖 Bot obuna tekshiruvi bilan ishga tushdi!');
+// ------------------------------------------------------------------
+// 6. XATOLIKLARNI USHLASH
+// ------------------------------------------------------------------
 bot.catch((err) => {
-  console.error("Botda xatolik yuz berdi:", err.error);
+  console.error("Botda xatolik:", err.error);
 });
+
+// Botni ishga tushirish
+bot.start();
+console.log("🚀 Premium Kino Bot muvaffaqiyatli ishga tushdi!");
