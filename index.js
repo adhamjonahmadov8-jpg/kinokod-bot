@@ -10,35 +10,28 @@ const ADMIN_USERNAME = "@ADHAMAJON_AHMADOV";
 
 const bot = new Bot(BOT_TOKEN);
 
-// Xotira bazasi: KOD -> { fileId: "...", caption: "..." }
-const moviesDatabase = new Map();
+// Vaqtinchalik saqlagichlar
 const requiredChannels = new Set();
 const usersList = new Set();
-let totalSearches = 0;
 
 // ==========================================
-// 2. SERVER VA AVTO-UYG'OTISH (SELF-PING 24/7)
+// 2. SERVER VA UXLAMASLIK TIZIMI (24/7)
 // ==========================================
 const PORT = process.env.PORT || 10000;
-const RENDER_URL = process.env.RENDER_EXTERNAL_URL; // Render avtomatik beradigan URL
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
 
-const server = http.createServer((req, res) => {
+http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("KinoBot Engine Active 24/7");
-});
-
-server.listen(PORT, () => {
+  res.end("KinoBot Server Online 24/7");
+}).listen(PORT, () => {
   console.log(`[SYSTEM] Server ${PORT}-portda ishlamoqda.`);
   
-  // Render uxlab qolmasligi uchun har 5 minutda o'ziga ping yuborish
   if (RENDER_URL) {
     setInterval(() => {
-      http.get(RENDER_URL, (res) => {
-        console.log("[SELF-PING] Bot uyg'oq holatda saqlandi.");
-      }).on("error", (err) => {
-        console.error("[PING ERROR]:", err.message);
-      });
-    }, 5 * 60 * 1000); // 5 daqiqa
+      http.get(RENDER_URL, () => {
+        console.log("[KEEP-ALIVE] Ping yuborildi.");
+      }).on("error", () => {});
+    }, 4 * 60 * 1000); // Har 4 daqiqada uyg'otib turadi
   }
 });
 
@@ -46,15 +39,12 @@ server.listen(PORT, () => {
 // 3. MAJBURIY OBUNA TEKSHIRUVI
 // ==========================================
 async function checkUserSub(ctx) {
-  if (requiredChannels.size === 0) return true;
-  if (ctx.from.id === MY_ADMIN_ID) return true;
+  if (requiredChannels.size === 0 || ctx.from.id === MY_ADMIN_ID) return true;
 
   for (const channel of requiredChannels) {
     try {
       const member = await ctx.api.getChatMember(channel, ctx.from.id);
-      if (["left", "kicked"].includes(member.status)) {
-        return false;
-      }
+      if (["left", "kicked"].includes(member.status)) return false;
     } catch (err) {
       console.error(`[SUB ERROR] ${channel}:`, err.message);
     }
@@ -87,28 +77,7 @@ bot.use(async (ctx, next) => {
 });
 
 // ==========================================
-// 4. KANALDA YANGI KINO CHIQGANDA AVTO-SAQLASH TIZIMI
-// ==========================================
-bot.on("channel_post", async (ctx) => {
-  const post = ctx.channelPost;
-  
-  if (post.video && post.caption) {
-    // Post izohidagi eng birinchi raqamni KOD deb oladi
-    const match = post.caption.match(/\d+/);
-    if (match) {
-      const code = match[0];
-      // Videoning file_id va to'liq izohini saqlab qoladi
-      moviesDatabase.set(code, {
-        fileId: post.video.file_id,
-        caption: post.caption
-      });
-      console.log(`[AUTO-SAVE] Kanal postidan kino saqlandi! KOD: ${code}`);
-    }
-  }
-});
-
-// ==========================================
-// 5. ASOSIY BUYRUQLAR (USER MENU)
+// 4. USER MENYU BUYRUQLARI
 // ==========================================
 bot.command("start", async (ctx) => {
   const isOk = await checkUserSub(ctx);
@@ -131,7 +100,7 @@ bot.command("start", async (ctx) => {
 
   await ctx.reply(
     `🎬 **Xush kelibsiz, ${ctx.from.first_name}!**\n\n` +
-    `Kino yuklab olish uchun shunchaki kino kodini yuboring (Masalan: \`21\` yoki \`200\`).`,
+    `Kino yuklab olish uchun kino kodi (Message ID)ni yuboring (Masalan: \`21\` yoki \`257\`).`,
     { parse_mode: "Markdown", reply_markup: userKb }
   );
 });
@@ -139,9 +108,9 @@ bot.command("start", async (ctx) => {
 bot.hears("🔍 Qanday foydalaniladi?", async (ctx) => {
   await ctx.reply(
     "📌 **Yo'riqnoma:**\n\n" +
-    "1. Kanalimizdan kino kodini toping.\n" +
-    "2. Botga faqat raqamni yuboring (Masalan: `21`).\n" +
-    "3. Bot kinoni barcha ma'lumotlari bilan sizga yetkazib beradi!",
+    "1. Kanalimizdagi kino kodini ko'ring.\n" +
+    "2. Botga faqat raqamni yuboring (Masalan: `257`).\n" +
+    "3. Bot kinoni bir zumda uzatib beradi!",
     { parse_mode: "Markdown" }
   );
 });
@@ -150,9 +119,7 @@ bot.hears("📊 Statistika", async (ctx) => {
   await ctx.reply(
     `📊 **Bot Statistikasi:**\n\n` +
     `👥 Foydalanuvchilar: **${usersList.size}** ta\n` +
-    `🎬 Baza ichidagi kinolar: **${moviesDatabase.size}** ta\n` +
-    `🔎 Jami qidiruvlar: **${totalSearches}** marta\n` +
-    `⚡️ Server holati: **Online 24/7 (Anti-Sleep Active)**`,
+    `⚡️ Server holati: **Online (24/7 Active)**`,
     { parse_mode: "Markdown" }
   );
 });
@@ -162,7 +129,7 @@ bot.hears("👨‍💻 Admin bilan aloqa", async (ctx) => {
 });
 
 // ==========================================
-// 6. MAXFIY ADMIN BUYRUQLARI
+// 5. ADMIN PANEL BUYRUQLARI
 // ==========================================
 bot.command("addchannel", async (ctx) => {
   if (ctx.from.id !== MY_ADMIN_ID) return;
@@ -196,52 +163,32 @@ bot.command("send", async (ctx) => {
 });
 
 // ==========================================
-// 7. KINO YUKLASH VA QIDIRISH (TO'LIQ MA'LUMOT BILERAN)
+// 6. KINO QIDIRISH VA TEZKOR UZATISH
 // ==========================================
-
-// Bot shaxsiyiga admin video va to'liq izoh yuborganda saqlash
-bot.on("message:video", async (ctx) => {
-  if (ctx.from.id !== MY_ADMIN_ID) return;
-
-  const caption = ctx.message.caption || "";
-  const match = caption.match(/\d+/);
-
-  if (match) {
-    const code = match[0];
-    moviesDatabase.set(code, {
-      fileId: ctx.message.video.file_id,
-      caption: caption
-    });
-    await ctx.reply(`✅ **Kino to'liq ma'lumotlari bilan saqlandi!**\n🔑 KODI: \`${code}\``, { parse_mode: "Markdown" });
-  } else {
-    await ctx.reply("⚠️ Izohda raqamli kod topilmadi!", { parse_mode: "Markdown" });
-  }
-});
-
-// Foydalanuvchi kod yuborganda kinoni va uning barcha izohini yuborish
 bot.on("message:text", async (ctx) => {
   const text = ctx.message.text.trim();
 
   if (["🔍 Qanday foydalaniladi?", "📊 Statistika", "👨‍💻 Admin bilan aloqa"].includes(text)) return;
 
   const match = text.match(/\d+/);
-
   if (!match) {
-    return ctx.reply("❌ **Noto'g'ri kod!** Iltimos, faqat kino kodini yuboring (Masalan: `21`).", { parse_mode: "Markdown" });
+    return ctx.reply("❌ **Noto'g'ri kod!** Iltimos, faqat kino kodi (raqam) yuboring.", { parse_mode: "Markdown" });
   }
 
-  const code = match[0];
+  const msgId = parseInt(match[0]);
+  const CHANNEL_ID = process.env.CHANNEL_ID; // Render Environment'dagi Kanal ID'si
+
+  if (!CHANNEL_ID) {
+    return ctx.reply("⚠️ Serverda `CHANNEL_ID` sozlanmagan!", { parse_mode: "Markdown" });
+  }
 
   await ctx.replyWithChatAction("upload_video");
 
-  if (moviesDatabase.has(code)) {
-    const movieData = moviesDatabase.get(code);
-    await ctx.replyWithVideo(movieData.fileId, {
-      caption: movieData.caption, // Siz kanalda yozgan BARCHA ma'lumot (Nomi, janri, tili) chiqadi
-    });
-    totalSearches++;
-  } else {
-    await ctx.reply("❌ **Afsuski, bu kod bo'yicha kino topilmadi.**\n\nKino hali bot bazasiga kiritilmagan.", { parse_mode: "Markdown" });
+  try {
+    // Kanaldan to'g'ridan-to'g'ri xabarni foydalanuvchiga uzatish
+    await ctx.api.forwardMessage(ctx.chat.id, CHANNEL_ID, msgId);
+  } catch (error) {
+    await ctx.reply("❌ **Afsuski, bu kod bo'yicha kino topilmadi.**\n\nKino kanaldan o'chirilgan bo'lishi yoki kod noto'g'ri kiritilgan bo'lishi mumkin.", { parse_mode: "Markdown" });
   }
 });
 
@@ -258,7 +205,7 @@ bot.on("callback_query:data", async (ctx) => {
   }
 });
 
-bot.catch((err) => console.error("[CRASH PREVENTED]:", err.error));
+bot.catch((err) => console.error("[BOT CRASH PREVENTED]:", err.error));
 
 bot.start();
 console.log("🚀 Premium Kino Bot muvaffaqiyatli ishga tushdi!");
