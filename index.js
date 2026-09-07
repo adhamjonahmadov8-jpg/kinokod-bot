@@ -2,7 +2,7 @@ const { Bot, InlineKeyboard, Keyboard } = require("grammy");
 const http = require("http");
 
 // ==========================================
-// 1. ASOSIY SOZLAMALAR
+// 1. SOZLAMALAR VA BAZA (IN-MEMORY MAP)
 // ==========================================
 const BOT_TOKEN = process.env.BOT_TOKEN || "8937720285:AAG-qKGEE8dCMsH2CNQwRlSrAtRCPwsN7DQ";
 const MY_ADMIN_ID = 8977292662; 
@@ -10,54 +10,103 @@ const ADMIN_USERNAME = "@ADHAMAJON_AHMADOV";
 
 const bot = new Bot(BOT_TOKEN);
 
-// Vaqtinchalik saqlagichlar
+// Bazani xavfsiz saqlash
+const moviesDatabase = new Map();
 const requiredChannels = new Set();
 const usersList = new Set();
+let totalSearches = 0;
 
 // ==========================================
-// 2. SERVER VA UXLAMASLIK TIZIMI (24/7)
+// 2. SERVER (RENDER ANTI-SLEEP)
 // ==========================================
 const PORT = process.env.PORT || 10000;
-const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
 
 http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("KinoBot Server Online 24/7");
+  res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end("KinoBot Server 24/7 Active");
 }).listen(PORT, () => {
-  console.log(`[SYSTEM] Server ${PORT}-portda ishlamoqda.`);
-  
-  if (RENDER_URL) {
-    setInterval(() => {
-      http.get(RENDER_URL, () => {
-        console.log("[KEEP-ALIVE] Ping yuborildi.");
-      }).on("error", () => {});
-    }, 4 * 60 * 1000); // Har 4 daqiqada uyg'otib turadi
+  console.log(`[SYSTEM] Server ${PORT}-portda muvaffaqiyatli ishga tushdi.`);
+});
+
+// ==========================================
+// 3. MAJBURIY OBUNA TEKSHIRUVI (ASYNCHRONOUS)
+// ==========================================
+async function checkUserSub(ctx) {
+  try {
+    if (requiredChannels.size === 0 || ctx.from.id === MY_ADMIN_ID) return true;
+
+    for (const channel of requiredChannels) {
+      try {
+        const member = await ctx.api.getChatMember(channel, ctx.from.id);
+        if (["left", "kicked"].includes(member.status)) return false;
+      } catch (err) {
+        console.error(`[SUB CHECK ERROR] ${channel}:`, err.message);
+      }
+    }
+    return true;
+  } catch (e) {
+    return true; // Xatolik bo'lsa bot to'xtab qolmaydi
+  }
+}
+
+// Barcha xabarlarga ishlov beruvchi himoya qatlami
+bot.use(async (ctx, next) => {
+  try {
+    if (ctx.from && !ctx.from.is_bot) {
+      usersList.add(ctx.from.id);
+    }
+
+    if (ctx.chat?.type === "private" && ctx.message?.text !== "/start") {
+      const isOk = await checkUserSub(ctx);
+      if (!isOk) {
+        const kb = new InlineKeyboard();
+        for (const ch of requiredChannels) {
+          kb.url(`📢 Kanalga obuna bo'lish`, `https://t.me/${ch.replace("@", "")}`).row();
+        }
+        kb.text("✅ Obunani tekshirish", "check_subscription_btn");
+
+        return ctx.reply("⚠️ **Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:**", {
+          parse_mode: "Markdown",
+          reply_markup: kb,
+        });
+      }
+    }
+    await next();
+  } catch (err) {
+    console.error("[MIDDLEWARE ERROR]:", err.message);
   }
 });
 
 // ==========================================
-// 3. MAJBURIY OBUNA TEKSHIRUVI
+// 4. KANAL POSTLARINI O'QISH VA SAQLASH
 // ==========================================
-async function checkUserSub(ctx) {
-  if (requiredChannels.size === 0 || ctx.from.id === MY_ADMIN_ID) return true;
-
-  for (const channel of requiredChannels) {
-    try {
-      const member = await ctx.api.getChatMember(channel, ctx.from.id);
-      if (["left", "kicked"].includes(member.status)) return false;
-    } catch (err) {
-      console.error(`[SUB ERROR] ${channel}:`, err.message);
+bot.on("channel_post", async (ctx) => {
+  try {
+    const post = ctx.channelPost;
+    
+    // Video va izoh bo'lsa
+    if (post.video && post.caption) {
+      // Izohdan "Kod:" so'zidan keyingi yoki eng birinchi raqamni topadi
+      const match = post.caption.match(/\d+/);
+      if (match) {
+        const code = match[0];
+        moviesDatabase.set(code, {
+          fileId: post.video.file_id,
+          caption: post.caption
+        });
+        console.log(`[BAZA] Yangi kino qo'shildi! KOD: ${code}`);
+      }
     }
+  } catch (err) {
+    console.error("[CHANNEL POST ERROR]:", err.message);
   }
-  return true;
-}
+});
 
-bot.use(async (ctx, next) => {
-  if (ctx.from && !ctx.from.is_bot) {
-    usersList.add(ctx.from.id);
-  }
-
-  if (ctx.chat?.type === "private" && ctx.message?.text !== "/start") {
+// ==========================================
+// 5. ASOSIY TUGBALAR VA BUYRUQLAR
+// ==========================================
+bot.command("start", async (ctx) => {
+  try {
     const isOk = await checkUserSub(ctx);
     if (!isOk) {
       const kb = new InlineKeyboard();
@@ -71,46 +120,27 @@ bot.use(async (ctx, next) => {
         reply_markup: kb,
       });
     }
+
+    const userKb = new Keyboard()
+      .text("🔍 Qanday foydalaniladi?").text("📊 Statistika").row()
+      .text("👨‍💻 Admin bilan aloqa").resized();
+
+    await ctx.reply(
+      `🎬 **Xush kelibsiz, ${ctx.from.first_name}!**\n\n` +
+      `Kino yuklab olish uchun shunchaki **Kino kodi (raqam)**ni yuboring (Masalan: \`21\` yoki \`102\`).`,
+      { parse_mode: "Markdown", reply_markup: userKb }
+    );
+  } catch (err) {
+    console.error("[START COMMAND ERROR]:", err.message);
   }
-
-  await next();
-});
-
-// ==========================================
-// 4. USER MENYU BUYRUQLARI
-// ==========================================
-bot.command("start", async (ctx) => {
-  const isOk = await checkUserSub(ctx);
-  if (!isOk) {
-    const kb = new InlineKeyboard();
-    for (const ch of requiredChannels) {
-      kb.url(`📢 Kanalga obuna bo'lish`, `https://t.me/${ch.replace("@", "")}`).row();
-    }
-    kb.text("✅ Obunani tekshirish", "check_subscription_btn");
-
-    return ctx.reply("⚠️ **Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:**", {
-      parse_mode: "Markdown",
-      reply_markup: kb,
-    });
-  }
-
-  const userKb = new Keyboard()
-    .text("🔍 Qanday foydalaniladi?").text("📊 Statistika").row()
-    .text("👨‍💻 Admin bilan aloqa").resized();
-
-  await ctx.reply(
-    `🎬 **Xush kelibsiz, ${ctx.from.first_name}!**\n\n` +
-    `Kino yuklab olish uchun kino kodi (Message ID)ni yuboring (Masalan: \`21\` yoki \`257\`).`,
-    { parse_mode: "Markdown", reply_markup: userKb }
-  );
 });
 
 bot.hears("🔍 Qanday foydalaniladi?", async (ctx) => {
   await ctx.reply(
-    "📌 **Yo'riqnoma:**\n\n" +
-    "1. Kanalimizdagi kino kodini ko'ring.\n" +
-    "2. Botga faqat raqamni yuboring (Masalan: `257`).\n" +
-    "3. Bot kinoni bir zumda uzatib beradi!",
+    "📌 **Botdan foydalanish yo'riqnomasi:**\n\n" +
+    "1. Telegram kanalimizdan o'zingizga yoqqan kinoning kodini oling.\n" +
+    "2. Ushbu botga faqat o'sha **kod raqamini** yozib yuboring (Masalan: `21`).\n" +
+    "3. Bot sizga kinoni barcha ma'lumotlari (nomi, janri, yili) bilan yuboradi!",
     { parse_mode: "Markdown" }
   );
 });
@@ -118,39 +148,41 @@ bot.hears("🔍 Qanday foydalaniladi?", async (ctx) => {
 bot.hears("📊 Statistika", async (ctx) => {
   await ctx.reply(
     `📊 **Bot Statistikasi:**\n\n` +
-    `👥 Foydalanuvchilar: **${usersList.size}** ta\n` +
-    `⚡️ Server holati: **Online (24/7 Active)**`,
+    `👥 Jami foydalanuvchilar: **${usersList.size}** ta\n` +
+    `🎬 Bazadagi kinolar: **${moviesDatabase.size}** ta\n` +
+    `🔎 Qidiruvlar soni: **${totalSearches}** marta\n` +
+    `⚡️ Server holati: **Online 24/7 (Protected)**`,
     { parse_mode: "Markdown" }
   );
 });
 
 bot.hears("👨‍💻 Admin bilan aloqa", async (ctx) => {
-  await ctx.reply(`💬 Savol va murojaatlar uchun admin: ${ADMIN_USERNAME}`);
+  await ctx.reply(`💬 Savollar va reklama bo'yicha admin: ${ADMIN_USERNAME}`);
 });
 
 // ==========================================
-// 5. ADMIN PANEL BUYRUQLARI
+// 6. ADMIN PANEL BUYRUQLARI
 // ==========================================
 bot.command("addchannel", async (ctx) => {
   if (ctx.from.id !== MY_ADMIN_ID) return;
   const chName = ctx.message.text.split(" ")[1];
   if (!chName || !chName.startsWith("@")) {
-    return ctx.reply("⚠️ Masalan: `/addchannel @kanal_nomi`", { parse_mode: "Markdown" });
+    return ctx.reply("⚠️ Noto'g'ri format! Masalan: `/addchannel @kanal_nomi`", { parse_mode: "Markdown" });
   }
   requiredChannels.add(chName);
-  await ctx.reply(`✅ **${chName}** obuna ro'yxatiga qo'shildi!`, { parse_mode: "Markdown" });
+  await ctx.reply(`✅ **${chName}** majburiy obunalar ro'yxatiga qo'shildi!`, { parse_mode: "Markdown" });
 });
 
 bot.command("delchannels", async (ctx) => {
   if (ctx.from.id !== MY_ADMIN_ID) return;
   requiredChannels.clear();
-  await ctx.reply("🗑 Barcha majburiy kanallar olib tashlandi!");
+  await ctx.reply("🗑 Barcha majburiy obuna kanallari o'chirib tashlandi!");
 });
 
 bot.command("send", async (ctx) => {
   if (ctx.from.id !== MY_ADMIN_ID) return;
   const msg = ctx.message.text.replace("/send", "").trim();
-  if (!msg) return ctx.reply("⚠️ Matn kiriting!");
+  if (!msg) return ctx.reply("⚠️ Yuborish uchun matn kiriting!");
 
   let count = 0;
   for (const uId of usersList) {
@@ -159,53 +191,68 @@ bot.command("send", async (ctx) => {
       count++;
     } catch (e) {}
   }
-  await ctx.reply(`✅ Reklama **${count}** ta foydalanuvchiga yuborildi.`);
+  await ctx.reply(`✅ Xabar **${count}** ta foydalanuvchiga yuborildi.`);
 });
 
 // ==========================================
-// 6. KINO QIDIRISH VA TEZKOR UZATISH
+// 7. KINO QIDIRISH VA YUKLASH TIZIMI
 // ==========================================
 bot.on("message:text", async (ctx) => {
-  const text = ctx.message.text.trim();
-
-  if (["🔍 Qanday foydalaniladi?", "📊 Statistika", "👨‍💻 Admin bilan aloqa"].includes(text)) return;
-
-  const match = text.match(/\d+/);
-  if (!match) {
-    return ctx.reply("❌ **Noto'g'ri kod!** Iltimos, faqat kino kodi (raqam) yuboring.", { parse_mode: "Markdown" });
-  }
-
-  const msgId = parseInt(match[0]);
-  const CHANNEL_ID = process.env.CHANNEL_ID; // Render Environment'dagi Kanal ID'si
-
-  if (!CHANNEL_ID) {
-    return ctx.reply("⚠️ Serverda `CHANNEL_ID` sozlanmagan!", { parse_mode: "Markdown" });
-  }
-
-  await ctx.replyWithChatAction("upload_video");
-
   try {
-    // Kanaldan to'g'ridan-to'g'ri xabarni foydalanuvchiga uzatish
-    await ctx.api.forwardMessage(ctx.chat.id, CHANNEL_ID, msgId);
-  } catch (error) {
-    await ctx.reply("❌ **Afsuski, bu kod bo'yicha kino topilmadi.**\n\nKino kanaldan o'chirilgan bo'lishi yoki kod noto'g'ri kiritilgan bo'lishi mumkin.", { parse_mode: "Markdown" });
+    const text = ctx.message.text.trim();
+
+    // Menyu tugmalariga tegmaslik
+    if (["🔍 Qanday foydalaniladi?", "📊 Statistika", "👨‍💻 Admin bilan aloqa"].includes(text)) return;
+
+    const match = text.match(/\d+/);
+    if (!match) {
+      return ctx.reply("❌ **Noto'g'ri kod!** Iltimos, faqat kino raqamini yuboring (Masalan: `21`).", { parse_mode: "Markdown" });
+    }
+
+    const code = match[0];
+
+    if (moviesDatabase.has(code)) {
+      await ctx.replyWithChatAction("upload_video");
+      const movie = moviesDatabase.get(code);
+      
+      await ctx.replyWithVideo(movie.fileId, {
+        caption: movie.caption
+      });
+      totalSearches++;
+    } else {
+      await ctx.reply(
+        "❌ **Afsuski, bu kod bo'yicha kino topilmadi.**\n\n" +
+        "Kino kodi noto'g'ri kiritilgan bo'lishi yoki kino hali bazaga qo'shilmagan bo'lishi mumkin.",
+        { parse_mode: "Markdown" }
+      );
+    }
+  } catch (err) {
+    console.error("[SEARCH ERROR]:", err.message);
+    await ctx.reply("⚠️ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.");
   }
 });
 
 bot.on("callback_query:data", async (ctx) => {
-  if (ctx.callbackQuery.data === "check_subscription_btn") {
-    const isOk = await checkUserSub(ctx);
-    if (isOk) {
-      await ctx.answerCallbackQuery({ text: "✅ Obuna tasdiqlandi!" });
-      await ctx.deleteMessage();
-      await ctx.reply("🎉 Obuna tasdiqlandi! Endi kino kodini yuborishingiz mumkin.");
-    } else {
-      await ctx.answerCallbackQuery({ text: "❌ Barcha kanallarga obuna bo'lmadingiz!", show_alert: true });
+  try {
+    if (ctx.callbackQuery.data === "check_subscription_btn") {
+      const isOk = await checkUserSub(ctx);
+      if (isOk) {
+        await ctx.answerCallbackQuery({ text: "✅ Obuna tasdiqlandi!" });
+        await ctx.deleteMessage();
+        await ctx.reply("🎉 Obuna tasdiqlandi! Endi kino kodini yuborishingiz mumkin.");
+      } else {
+        await ctx.answerCallbackQuery({ text: "❌ Barcha kanallarga obuna bo'lmadingiz!", show_alert: true });
+      }
     }
+  } catch (err) {
+    console.error("[CALLBACK ERROR]:", err.message);
   }
 });
 
-bot.catch((err) => console.error("[BOT CRASH PREVENTED]:", err.error));
+// Botni to'xtab qolishdan (Crash) saqlash
+bot.catch((err) => {
+  console.error("[GLOBAL BOT CRASH PREVENTED]:", err.error);
+});
 
 bot.start();
-console.log("🚀 Premium Kino Bot muvaffaqiyatli ishga tushdi!");
+console.log("🚀 KinoBot muvaffaqiyatli ishga tushdi va xatoliklardan himoyalandi!");
